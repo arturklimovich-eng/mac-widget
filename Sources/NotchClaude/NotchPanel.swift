@@ -59,11 +59,10 @@ final class Model: ObservableObject {
 }
 
 /// Содержимое островка: звёздочка, расход текущего окна, точка активности.
-/// При алерте вокруг расходятся волны, в спокойном состоянии — одна волна на появление.
+/// Волны при алерте рисует `Waves` — снаружи, чтобы их не срезала форма блока.
 struct IslandView: View {
     let snap: Snapshot
 
-    @State private var wave = false
     @State private var pulse = false
 
     var body: some View {
@@ -79,44 +78,49 @@ struct IslandView: View {
                 .opacity(snap.isActive && pulse ? 0.35 : 1)
         }
         .frame(height: Theme.islandHeight)
-        .background(alignment: .center) { waves }
         .onAppear {
-            wave = true
             withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { pulse = true }
         }
     }
 
+    /// Спокойно — расход, при алерте — процент того окна, которое алерт и подняло:
+    /// иначе островок тревожит красным, показывая при этом мирные 10%.
     private var label: String {
-        switch snap.alert {
-        case .none: fmt(snap.block.total)
-        case .warning: "\(Int(snap.blockRatio * 100))%"
-        case .critical: "\(Int(snap.blockRatio * 100))% · \(resetShort)"
-        }
+        guard snap.alert != .none else { return fmt(snap.block.total) }
+        let weekWorse = snap.weekRatio > snap.blockRatio
+        let worst = max(snap.blockRatio, snap.weekRatio)
+        guard snap.alert == .critical else { return pct(worst) }
+        // Время сброса относится только к пятичасовому окну; у недели его нет.
+        return "\(pct(worst)) · \(weekWorse ? "нед." : resetShort)"
     }
 
-    /// Сколько осталось до сброса окна, в формате Ч:ММ.
+    /// Сколько осталось до конца текущего блока, в формате Ч:ММ.
     private var resetShort: String {
         guard let reset = snap.blockResetsAt else { return "—" }
         let left = max(0, Int(reset.timeIntervalSinceNow))
         return String(format: "%d:%02d", left / 3600, (left % 3600) / 60)
     }
+}
 
-    /// Два кольца по форме островка, разбегающиеся друг за другом.
-    private var waves: some View {
+/// Два кольца, разбегающиеся вокруг островка при алерте. Своё состояние и свой onAppear:
+/// анимация обязана стартовать заново каждый раз, когда островок с алертом появляется.
+private struct Waves: View {
+    let alert: AlertLevel
+
+    @State private var on = false
+
+    var body: some View {
         ForEach(0..<2, id: \.self) { i in
             RoundedRectangle(cornerRadius: 17)
-                .strokeBorder(Theme.accent(for: snap.alert).opacity(snap.alert == .critical ? 0.5 : 0.45),
+                .strokeBorder(Theme.accent(for: alert).opacity(alert == .critical ? 0.5 : 0.45),
                               lineWidth: 1.5)
-                .padding(-4)
-                .scaleEffect(wave ? 1.45 : 1)
-                .opacity(wave ? 0 : 0.7)
-                .animation(ripple(delay: Double(i) * 0.3), value: wave)
+                .scaleEffect(on ? 1.45 : 1)
+                .opacity(on ? 0 : 0.7)
+                .animation(.easeOut(duration: 1.2).delay(Double(i) * 0.3).repeatForever(autoreverses: false),
+                           value: on)
         }
-    }
-
-    private func ripple(delay: Double) -> Animation {
-        let base = Animation.easeOut(duration: 1.2).delay(delay)
-        return snap.alert == .none ? base : base.repeatForever(autoreverses: false)
+        .allowsHitTesting(false)
+        .onAppear { on = true }
     }
 }
 
@@ -130,8 +134,7 @@ struct RootView: View {
         VStack(spacing: 0) {
             Color.clear.frame(height: notch.height)      // зона наведения поверх самой чёлки
             box
-                .padding(.horizontal, model.state == .hidden ? 0 : NotchController.shadowMargin)
-                .padding(.bottom, model.state == .hidden ? 0 : NotchController.shadowMargin)
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
@@ -141,8 +144,12 @@ struct RootView: View {
         return UnevenRoundedRectangle(bottomLeadingRadius: radius, bottomTrailingRadius: radius)
     }
 
+    /// Чёрный блок морфится размером и скруглением, содержимое перекрёстно затухает.
+    /// Размер задаётся тут, а не размером окна: окно при показе сразу становится
+    /// максимальным, иначе анимация SwiftUI и анимация окна расходятся и всё дёргается.
     private var box: some View {
-        ZStack(alignment: .top) {
+        let size = model.boxSize(for: model.state)
+        return ZStack(alignment: .top) {
             IslandView(snap: model.snap)
                 .opacity(model.state == .island ? 1 : 0)
                 .animation(.easeOut(duration: 0.18), value: model.state)
@@ -153,10 +160,17 @@ struct RootView: View {
                            : .easeOut(duration: 0.1),
                            value: model.state)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(width: size.width, height: size.height, alignment: .top)
         .background(Color.black)
         .clipShape(shape)
-        .shadow(color: .black.opacity(0.55), radius: 20, y: 9)
+        .shadow(color: .black.opacity(0.55), radius: 20, y: 18)   // как в прототипе: 0 18px 40px
+        // Кольца — снаружи клипа и после тени: внутри их срезала бы форма блока,
+        // а до тени они получили бы собственную. Отступ -4, как inset:-4 в прототипе.
+        .background {
+            if model.state == .island, model.snap.alert != .none {
+                Waves(alert: model.snap.alert).padding(-4)
+            }
+        }
     }
 }
 
@@ -164,6 +178,7 @@ struct RootView: View {
 /// SwiftUI `.onHover` в неактивной non-activating панели не срабатывает.
 final class HoverHostingView: NSHostingView<RootView> {
     var onHover: ((Bool) -> Void)?
+    var onMove: ((NSPoint) -> Void)?
     var onClick: (() -> Void)?
     /// Зона-переключатель в экранных координатах; клики вне неё уходят в SwiftUI (вкладки, «Выход»).
     var toggleRect: (() -> CGRect)?
@@ -172,12 +187,18 @@ final class HoverHostingView: NSHostingView<RootView> {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(NSTrackingArea(rect: bounds,
-                                       options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
                                        owner: self))
     }
 
     override func mouseEntered(with event: NSEvent) { onHover?(true) }
     override func mouseExited(with event: NSEvent) { onHover?(false) }
+
+    /// Окно шире видимого блока (в запасе рисуется тень), поэтому наведение
+    /// считаем по положению курсора, а не по границам окна.
+    override func mouseMoved(with event: NSEvent) {
+        onMove?(window?.convertPoint(toScreen: event.locationInWindow) ?? .zero)
+    }
 
     override func mouseDown(with event: NSEvent) {
         let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
@@ -199,12 +220,16 @@ final class NotchWindow: NSPanel {
 final class NotchController {
     /// Запас вокруг чёрного блока, в котором рисуется тень.
     static let shadowMargin: CGFloat = 28
+    /// Снизу запаса нужно больше: тень смещена на 18 и размыта на 20. Отдельной константой,
+    /// потому что горизонтальный запас идёт в ширину окна, а лишняя ширина съедает клики.
+    static let bottomShadowMargin: CGFloat = 40
 
     private let model = Model()
     private let panel: NotchWindow
     private let notch: CGRect
     private var bag = Set<AnyCancellable>()
     private var ticker: Timer?
+    private var shrink: DispatchWorkItem?
 
     init() {
         let (_, notch) = Notch.geometry()
@@ -223,9 +248,15 @@ final class NotchController {
 
         let hover = HoverHostingView(rootView: RootView(model: model, notch: notch))
         // Раскрытую панель курсор не закрывает — только повторный клик.
+        // Вход в чёлку ловим по mouseEntered (спрятанное окно ровно по ней),
+        // дальше положение курсора уточняет mouseMoved.
         hover.onHover = { [weak self] hovering in
             guard let self, model.state != .expanded else { return }
             set(hovering ? .island : restingState)
+        }
+        hover.onMove = { [weak self] point in
+            guard let self, model.state != .expanded else { return }
+            set(visibleRect.contains(point) ? .island : restingState)
         }
         hover.onClick = { [weak self] in
             guard let self else { return }
@@ -234,7 +265,7 @@ final class NotchController {
         // Пока панель раскрыта, переключает только клик по самой чёлке.
         hover.toggleRect = { [weak self] in
             guard let self else { return .zero }
-            return model.state == .expanded ? notch : panel.frame
+            return model.state == .expanded ? handleRect : visibleRect
         }
         panel.contentView = hover
         panel.setFrame(frame(for: .hidden), display: false)
@@ -247,13 +278,19 @@ final class NotchController {
             .sink { [weak self] in self?.apply($0) }
             .store(in: &bag)
 
-        // Алерт должен быть заметен, когда панель скрыта: островок вылезает сам.
+        // Алерт должен быть заметен, когда панель скрыта: островок вылезает сам, а когда
+        // алерт погас — уходит, иначе висит вечно (курсор давно ушёл, событий больше нет).
+        // Уровень берём из события: @Published шлёт в willSet, model.snap внутри sink ещё старый.
         model.$snap
             .map(\.alert)
             .removeDuplicates()
-            .sink { [weak self] _ in
-                guard let self else { return }
-                if model.state == .hidden { set(restingState) } else { apply(model.state) }
+            .sink { [weak self] alert in
+                guard let self, model.state != .expanded else { return }   // раскрытую панель не трогаем
+                if alert != .none {
+                    set(.island)
+                } else if !visibleRect.contains(NSEvent.mouseLocation) {
+                    set(.hidden)
+                }
             }
             .store(in: &bag)
 
@@ -271,21 +308,44 @@ final class NotchController {
         if state != .hidden { model.refresh() }
     }
 
-    /// Окно = чёрный блок плюс запас на тень; спрятанное окно строго по чёлке,
-    /// иначе оно перехватывало бы клики по строке меню.
+    /// Полоса-ручка раскрытой панели: верхняя строка с шапкой, ровно там же, где был
+    /// островок. Клик по самой чёлке не годится — она прозрачная, SwiftUI не считает
+    /// её попаданием, и событие уходит мимо окна.
+    private var handleRect: CGRect {
+        let size = model.boxSize(for: .expanded)
+        return CGRect(x: notch.midX - size.width / 2, y: notch.minY - Theme.islandHeight,
+                      width: size.width, height: Theme.islandHeight)
+    }
+
+    /// Видимая часть виджета в экранных координатах: чёлка плюс чёрный блок под ней.
+    private var visibleRect: CGRect {
+        let size = model.boxSize(for: model.state)
+        guard size.height > 0 else { return notch }
+        return notch.union(CGRect(x: notch.midX - size.width / 2, y: notch.minY - size.height,
+                                  width: size.width, height: size.height))
+    }
+
+    /// Спрятанное окно строго по чёлке, иначе оно перехватывало бы клики по строке
+    /// меню; видимое — сразу максимальное, размер блока внутри анимирует SwiftUI.
     private func frame(for state: PanelState) -> CGRect {
         guard state != .hidden else { return notch }
-        let box = model.boxSize(for: state)
-        let width = box.width + 2 * Self.shadowMargin
-        let height = notch.height + box.height + Self.shadowMargin
+        let width = Theme.panelWidth + 2 * Self.shadowMargin
+        let height = notch.height + Theme.panelHeightAlert + Self.bottomShadowMargin
         return CGRect(x: notch.midX - width / 2, y: notch.maxY - height, width: width, height: height)
     }
 
     private func apply(_ state: PanelState) {
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = state == .expanded ? 0.3 : 0.24
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 0.9, 0.4, 1)
-            panel.animator().setFrame(frame(for: state), display: true)
+        shrink?.cancel()
+        if state == .hidden {
+            // Окно ужимается только после того, как блок схлопнулся, иначе анимацию обрежет.
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, model.state == .hidden else { return }
+                panel.setFrame(frame(for: .hidden), display: true)
+            }
+            shrink = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.34, execute: work)
+        } else {
+            panel.setFrame(frame(for: state), display: true)
         }
 
         // Видно — обновляем часто, спрятано — раз в минуту, чтобы поймать подход к лимиту.

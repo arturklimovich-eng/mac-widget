@@ -15,6 +15,13 @@ if CommandLine.arguments.contains("--dump") {
     exit(0)
 }
 
+// Отладочный рендер интерфейса в PNG: окна виджета лежат поверх строки меню,
+// и обычным скриншотом их не снять.
+if let i = CommandLine.arguments.firstIndex(of: "--render"), i + 1 < CommandLine.arguments.count {
+    renderPreviews(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
+    exit(0)
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // без иконки в Dock
 

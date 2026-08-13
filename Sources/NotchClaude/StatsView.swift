@@ -14,11 +14,11 @@ private enum Tab: String, CaseIterable, Identifiable {
 /// Раскрытая панель по прототипу NotchClaude (блок `panelStyle`).
 /// Фон и скругление рисует NotchPanel — здесь контент прозрачный.
 ///
-/// Бюджет высоты, 268 pt без плашки алерта:
-/// 12 отступ сверху + 14.3 шапка + 9 + 11.8 подпись окна + 4 + 6 шкала
-/// + 10 + 23 вкладки + 9 + 148 область вкладки + 8 + 11.8 футер ≈ 267.
-/// Плашка алерта добавляет 8 + 19.8 → 300 pt. Остаток съедает `Spacer` внизу,
-/// поэтому переключение вкладок высоту не меняет.
+/// Бюджет высоты, 268 pt без плашки алерта (фактические метрики SwiftUI, не CSS):
+/// 12 отступ сверху + 15 шапка + 9 + 13 подпись окна + 4 + 6 шкала
+/// + 10 + 24 вкладки + 9 + 142 область вкладки + 8 + 13 футер + 2 снизу = 268.
+/// Прототип отдаёт под область вкладки 148 pt; строки SwiftUI на 5-6 pt выше
+/// браузерных, эта разница и съедает остаток. Плашка алерта добавляет 8 + 24 → 300 pt.
 struct StatsView: View {
     let snap: Snapshot
 
@@ -35,14 +35,18 @@ struct StatsView: View {
             windowLabel.padding(.top, 9)
             meter(snap.blockRatio, blockFill, width: inner, height: 6).padding(.top, 4)
             tabBar.padding(.top, 10)
+            // Область вкладки забирает весь остаток: жёсткие 148 pt срезали футер,
+            // если метрики шрифтов оказывались чуть выше расчётных. Нижний отступ
+            // минимальный — в прототипе футер стоит вплотную к нижнему краю.
             content
-                .frame(width: inner, height: 148, alignment: .topLeading)
+                .frame(width: inner, alignment: .topLeading)
+                .frame(maxHeight: .infinity, alignment: .top)
                 .padding(.top, 9)
             footer.padding(.top, 8)
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
+        .padding(.bottom, 2)
         .frame(width: Theme.panelWidth,
                height: snap.alert == .none ? Theme.panelHeight : Theme.panelHeightAlert,
                alignment: .topLeading)
@@ -87,7 +91,7 @@ struct StatsView: View {
         let worst = max(snap.blockRatio, snap.weekRatio)
         let tint = Theme.accent(for: snap.alert)
         let what = weekWorse ? "недельный расход на исходе" : "5-часовое окно на исходе"
-        return Text("\(what): \(pct(worst)) от твоего обычного максимума")
+        return Text(verbatim: "\(what): \(pct(worst)) от твоего обычного максимума")
             .font(.system(size: 10, weight: .medium))
             .foregroundStyle(tint)
             .lineLimit(1)
@@ -101,25 +105,33 @@ struct StatsView: View {
 
     private var windowLabel: some View {
         HStack(spacing: 8) {
-            Text(snap.blockLimit > 0
+            // fixedSize: иначе HStack отдаёт всю ширину распорке и подпись схлопывается.
+            // verbatim обязателен: в локализуемом литерале со вставкой знак «%»
+            // из процента ломает форматирование и строка пропадает целиком.
+            Text(verbatim: snap.blockLimit > 0
                  ? "5 ч · \(pct(snap.blockRatio)) от твоего обычного максимума"
                  : "5 ч · ориентира пока нет")
                 .lineLimit(1)
+                .fixedSize()
             Spacer(minLength: 4)
             Text(resetLabel)
                 .font(.mono(10))
                 .lineLimit(1)
+                .fixedSize()
         }
         .foregroundStyle(Theme.text(0.5))
         .frame(width: inner)
     }
 
     /// Заполнение шкалы окна: спокойное состояние — градиент, алерт — цвет уровня.
+    /// Уровень берём по самому окну, а не по snap.alert: тот может быть поднят неделей,
+    /// и тогда шкала, залитая на 10%, красилась бы в критический красный.
     private var blockFill: AnyShapeStyle {
-        snap.alert == .none
+        let own = level(snap.blockRatio)
+        return own == .none
             ? AnyShapeStyle(LinearGradient(colors: [Theme.accentDeep, Theme.accent],
                                           startPoint: .leading, endPoint: .trailing))
-            : AnyShapeStyle(Theme.accent(for: snap.alert))
+            : AnyShapeStyle(Theme.accent(for: own))
     }
 
     // MARK: - Вкладки
@@ -136,11 +148,15 @@ struct StatsView: View {
                                 .font(.system(size: 11, weight: tab == item ? .semibold : .regular))
                                 .foregroundStyle(tab == item ? Theme.text : Theme.text(0.45))
                                 .padding(.top, 2)
-                                .padding(.bottom, tab == item ? 5 : 6)
-                            if tab == item {
-                                Rectangle().fill(Theme.accent).frame(height: 2)
-                            }
+                                .padding(.bottom, 5)
+                            // Прозрачная полоска у неактивных: подчёркивание не должно
+                            // растягивать вкладку и расталкивать соседей. Отступ одинаковый,
+                            // иначе колонки разной высоты и хайрлайн отходит от подчёркивания.
+                            Rectangle()
+                                .fill(tab == item ? Theme.accent : .clear)
+                                .frame(height: 2)
                         }
+                        .fixedSize()
                     }
                     .buttonStyle(.plain)
                 }
@@ -202,8 +218,8 @@ struct StatsView: View {
     private var blockTab: some View {
         VStack(alignment: .leading, spacing: 0) {
             headline(snap.block.total, note: "\(snap.requests) отв. за окно")
-            if snap.week.total == 0 || snap.blockSeries.isEmpty {
-                empty.padding(.top, 8)
+            if snap.block.total == 0 {
+                empty("в текущем окне расхода нет").padding(.top, 8)
             } else {
                 let peak = snap.blockSeries.map(\.tokens.total).max() ?? 0
                 HStack(alignment: .bottom, spacing: 5) {
@@ -233,8 +249,8 @@ struct StatsView: View {
             headline(snap.week.total, note: snap.weekLimit > 0
                      ? "\(pct(snap.weekRatio)) от максимума за 7 дней"
                      : "ориентира пока нет")
-            if snap.week.total == 0 || snap.byDay.isEmpty {
-                empty.padding(.top, 8)
+            if snap.week.total == 0 {
+                empty("за 7 дней расхода нет").padding(.top, 8)
             } else {
                 let peak = snap.byDay.map(\.tokens.total).max() ?? 0
                 HStack(alignment: .bottom, spacing: 9) {
@@ -264,7 +280,7 @@ struct StatsView: View {
         let peak = top.map(\.tokens.total).max() ?? 0
         return VStack(alignment: .leading, spacing: 10) {
             if top.isEmpty {
-                empty
+                empty("за 7 дней моделей нет")
             } else {
                 ForEach(top) { item in
                     HStack(spacing: 10) {
@@ -308,8 +324,10 @@ struct StatsView: View {
 
     // MARK: - Мелкие блоки
 
-    private var empty: some View {
-        Text("логов Claude Code пока нет")
+    /// Пусто на вкладке — это про её период. «Логов нет» говорим, только когда логов
+    /// действительно нет: иначе вкладка «Сессия» рядом показывает расход и противоречит.
+    private func empty(_ text: String) -> some View {
+        Text(snap.lastEvent == nil ? "логов Claude Code пока нет" : text)
             .foregroundStyle(Theme.text(0.45))
     }
 
@@ -340,8 +358,6 @@ struct StatsView: View {
     }
 
     // MARK: - Тексты
-
-    private func pct(_ ratio: Double) -> String { "\(Int((ratio * 100).rounded()))%" }
 
     private var resetLabel: String {
         guard let at = snap.blockResetsAt else { return "окно пустое" }
