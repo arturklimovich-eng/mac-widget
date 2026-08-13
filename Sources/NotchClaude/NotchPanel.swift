@@ -27,10 +27,20 @@ final class Model: ObservableObject {
     @Published var snap = Snapshot()
     @Published var state = PanelState.hidden
 
+    /// Снимки считаются строго по одному на своей очереди: кеш `UsageReader`
+    /// не переживает параллельного доступа (наведение, таймер и старт лезут разом).
+    private let queue = DispatchQueue(label: "dev.airshow.notchclaude.usage")
+    private var refreshing = false
+
     func refresh() {
-        Task.detached {
+        guard !refreshing else { return }
+        refreshing = true
+        queue.async {
             let snap = UsageReader.snapshot()
-            await MainActor.run { self.snap = snap }
+            Task { @MainActor in
+                self.snap = snap
+                self.refreshing = false
+            }
         }
     }
 
