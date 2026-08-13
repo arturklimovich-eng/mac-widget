@@ -1,0 +1,21 @@
+name: build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версия Swift
+        run: swift --version
+
+      - name: Сборка release
+        run: swift build -c release
+
+      - name: Самопроверка парсера
+        run: .build/release/NotchClaude --selftest

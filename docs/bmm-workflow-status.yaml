@@ -1,0 +1,46 @@
+# BMad Method Workflow Status
+# Generated: 2026-08-13
+# Этот файл отслеживает прохождение проекта по BMad Method.
+# Обновляется по мере завершения воркфлоу.
+# Не править вручную, если не уверены в структуре.
+
+# ----------------------------------------------------------------
+# ЗНАЧЕНИЯ СТАТУСОВ
+# ----------------------------------------------------------------
+# required: обязателен для этого трека.
+# recommended: хорошая практика, но можно пропустить.
+# optional: включается по потребности проекта.
+# conditional: включается только при определённых условиях.
+# not-applicable: не применим к выбранному треку.
+# ----------------------------------------------------------------
+
+metadata:
+  project_name: 'NotchClaude'
+  project_type: software
+  track: bmad-method
+  field_type: greenfield
+  workflow_path_file: '.bmad/bmm/workflows/workflow-status/paths/method-greenfield.yaml'
+
+workflow_status:
+  # Фаза 0: Discovery (опционально)
+  product-brief: docs/product-brief-notch-claude-2026-08-13.md # agent: analyst
+
+  # Фаза 1: Planning
+  prd: docs/PRD.md # agent: pm
+  validate-prd: optional # agent: pm
+  create-design: not-applicable # agent: ux-designer — один экран, UX-документ не нужен
+
+  # Фаза 2: Solutioning
+  create-architecture: docs/architecture.md # agent: architect
+  test-design: not-applicable # agent: tea — вся проверка в `--selftest`
+  validate-architecture: optional # agent: architect
+  solutioning-gate-check: optional # agent: architect
+
+  # Фаза 3: Implementation
+  sprint-planning: not-applicable # agent: sm — эпики и истории ведутся прямо в docs/PRD.md
+  retrospective: optional # agent: sm
+
+# Стандарты кода для этого проекта
+standards:
+  - docs/standards/swift.md
+  - docs/standards/01-git-standards.md
